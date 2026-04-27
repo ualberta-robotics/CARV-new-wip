@@ -16,17 +16,22 @@ KF_DIR = os.path.join(DATASET_DIR, "keyframes")
 MESH_PATH = os.path.join(DATASET_DIR, "final_mesh.obj")
 OUTPUT_DIR = "./textured_output"
 
-# The Rectified Camera Intrinsics (Must match your SLAM P1 matrix!)
-FX, FY = 440.9, 440.9
-CX, CY = 320.3, 320.6
-IMG_W, IMG_H = 640, 640
+# Camera intrinsics - auto-detected from first keyframe image
+# Defaults for RealSense D435 at 848x480 (depth module resolution)
+FX, FY = 424.0, 424.0
+CX, CY = 424.0, 240.0
+IMG_W, IMG_H = 848, 480
+
+# Mesh decimation target
+TARGET_FACES = 2000
 
 # Atlas Settings
 FACE_RES = 32  # Every triangle gets a 32x32 pixel block in the atlas
 # ==============================================================================
 
 def load_dataset():
-    print("[1/5] Loading Mesh and Keyframes...")
+    global FX, FY, CX, CY, IMG_W, IMG_H
+    print("[1/6] Loading Mesh and Keyframes...")
     mesh = trimesh.load(MESH_PATH, process=False)
     
     keyframes = []
@@ -52,7 +57,6 @@ def load_dataset():
                 T_w2c[:3, 3] = -rot.T @ np.array([p['x'], p['y'], p['z']])
                 
                 # Camera_link (+X fwd, +Y left, +Z up) -> Optical (+X right, +Y down, +Z fwd)
-                # optical_x = -cam_y, optical_y = -cam_z, optical_z = cam_x
                 R_link_to_optical = np.array([
                     [ 0, -1,  0,  0],
                     [ 0,  0, -1,  0],
@@ -63,6 +67,15 @@ def load_dataset():
                 
                 img = cv2.imread(img_path)
                 
+                # Auto-detect image dimensions from the first keyframe
+                if len(keyframes) == 0:
+                    IMG_H, IMG_W = img.shape[:2]
+                    # Approximate intrinsics for RealSense at this resolution
+                    FX = FY = IMG_W / 2.0
+                    CX = IMG_W / 2.0
+                    CY = IMG_H / 2.0
+                    print(f"      Auto-detected image: {IMG_W}x{IMG_H}, intrinsics: fx={FX:.0f} cx={CX:.0f} cy={CY:.0f}")
+                
                 keyframes.append({
                     'id': data['frame_id'],
                     'T_w2c': T_w2c,
@@ -72,6 +85,25 @@ def load_dataset():
                 
     print(f"      Loaded {len(mesh.faces)} faces and {len(keyframes)} keyframes.")
     return mesh, keyframes
+
+def decimate_mesh(mesh):
+    print(f"[2/6] Decimating mesh from {len(mesh.faces)} to ~{TARGET_FACES} faces...")
+    if len(mesh.faces) <= TARGET_FACES:
+        print(f"      Mesh already has {len(mesh.faces)} faces, skipping.")
+        return mesh
+    
+    # Use quadric decimation if available, otherwise simple vertex clustering
+    try:
+        simplified = mesh.simplify_quadric_decimation(TARGET_FACES)
+        print(f"      Decimated to {len(simplified.faces)} faces.")
+        return simplified
+    except Exception:
+        # Fallback: subsample faces
+        ratio = TARGET_FACES / len(mesh.faces)
+        mask = np.random.choice(len(mesh.faces), TARGET_FACES, replace=False)
+        simplified = mesh.submesh([mask], append=True)
+        print(f"      Decimated to {len(simplified.faces)} faces (random subsample).")
+        return simplified
 
 def assign_faces_to_cameras_simple(mesh, keyframes):
     print("[2/5] Calculating Optimal Views & Raycasting Occlusions...")
@@ -157,7 +189,8 @@ def assign_faces_to_cameras_simple(mesh, keyframes):
     return face_assignments
 
 def assign_faces_to_cameras_graph_cut(mesh, keyframes):
-    print("[2/5] Calculating Optimal Views (Graph Cut Optimization)...")
+    step = "3/6"
+    print(f"[{step}] Calculating Optimal Views (Graph Cut Optimization)...")
     
     num_faces = len(mesh.faces)
     num_cams = len(keyframes)
@@ -264,7 +297,7 @@ def assign_faces_to_cameras_graph_cut(mesh, keyframes):
     return face_assignments
 
 def build_texture_atlas(mesh, keyframes, assignments):
-    print("[3/5] UV Unwrapping and Extracting Textures...")
+    print("[4/6] UV Unwrapping and Extracting Textures...")
     
     num_assigned_faces = len(assignments)
     if num_assigned_faces == 0:
@@ -333,7 +366,7 @@ def build_texture_atlas(mesh, keyframes, assignments):
     return atlas_img, face_uvs
 
 def export_textured_obj(mesh, face_uvs):
-    print("[4/5] Writing Output Files...")
+    print("[5/6] Writing Output Files...")
     os.makedirs(OUTPUT_DIR, exist_ok=True)
     
     obj_path = os.path.join(OUTPUT_DIR, "textured_scan.obj")
@@ -382,6 +415,7 @@ def export_textured_obj(mesh, face_uvs):
 
 if __name__ == "__main__":
     mesh, keyframes = load_dataset()
+    #mesh = decimate_mesh(mesh)
     assignments = assign_faces_to_cameras_graph_cut(mesh, keyframes)
     
     atlas_img, face_uvs = build_texture_atlas(mesh, keyframes, assignments)
@@ -389,4 +423,4 @@ if __name__ == "__main__":
     export_textured_obj(mesh, face_uvs)
     cv2.imwrite(os.path.join(OUTPUT_DIR, "atlas.png"), atlas_img)
     
-    print("[5/5] Pipeline Complete! Load 'textured_scan.obj' into Blender.")
+    print("[6/6] Pipeline Complete! Load 'textured_scan.obj' into Blender.")
