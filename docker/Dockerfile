@@ -8,6 +8,9 @@ RUN apt-get update && apt-get install -y \
     libglib2.0-0 \
     netcat nano\
     ros-humble-cv-bridge ros-humble-message-filters ros-humble-image-transport \
+    ros-humble-realsense2-camera \
+    ros-humble-rtabmap-ros ros-humble-rtabmap-slam ros-humble-rtabmap-util ros-humble-rtabmap-sync \
+    ros-humble-rtabmap-odom \
     libcgal-dev libeigen3-dev libboost-dev libboost-serialization-dev libboost-graph-dev\
     && rm -rf /var/lib/apt/lists/*
 

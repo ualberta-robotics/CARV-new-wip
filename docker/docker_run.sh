@@ -1,9 +1,15 @@
+set -e
+
 # First, ensure the host allows the connection
 xhost +local:$(whoami)
+
+# ensure fresh container
+docker build -t quest3_receiver:latest .
 
 # Run the container with authority mounting
 docker run -it --rm \
   --name quest3_receiver \
+  --privileged \
   --network host \
   --ipc=host \
   --security-opt label=disable \
@@ -12,6 +18,7 @@ docker run -it --rm \
   -v $XAUTHORITY:/tmp/.Xauthority:Z \
   -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
   -v $(pwd)/workspace:/workspace:Z \
+  -v /dev:/dev \
   --device /dev/dri:/dev/dri \
   quest3_receiver:latest \
-  /bin/bash
+  /bin/bash -c "cd /workspace && ./run.sh"

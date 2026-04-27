@@ -22,8 +22,7 @@ setup(
     tests_require=['pytest'],
     entry_points={
         'console_scripts': [
-            'receiver = quest3carv.receiver_node:main',
-            'spatial_recon = quest3carv.spatial_node:main',
+            'rtabmap_bridge = quest3carv.rtabmap_bridge_node:main',
             'sender = quest3carv.streamer_node:main',
             'saver = quest3carv.saver_node:main',
         ],
