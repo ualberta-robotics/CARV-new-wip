@@ -32,14 +32,16 @@ def generate_launch_description():
             'subscribe_depth': True,
             'subscribe_rgb': True,
             'approx_sync': True,
+            'approx_sync_max_interval': 0.2,
             'qos_image': 2,      # 2 = Best Effort
             'qos_depth': 2,
             'qos_camera_info': 2
         }],
+        arguments=['--Odom/MinInliers', '10', '--OdomF2M/BundleAdjustment', '0', '--Odom/ResetCountdown', '1'],
         remappings=[
-            ('rgb/image', '/camera/color/image_raw'),
-            ('rgb/camera_info', '/camera/color/camera_info'),
-            ('depth/image', '/camera/aligned_depth_to_color/image_raw'),
+            ('rgb/image', '/camera/camera/color/image_raw'),
+            ('rgb/camera_info', '/camera/camera/color/camera_info'),
+            ('depth/image', '/camera/camera/depth/image_rect_raw'), # Fallback to rect_raw if aligned is missing
             ('odom', '/odom')
         ]
     )
@@ -56,6 +58,7 @@ def generate_launch_description():
             'subscribe_rgb': True,
             'publish_image': True,
             'approx_sync': True,
+            'approx_sync_max_interval': 0.1,
             'qos_image': 2,
             'qos_depth': 2,
             'qos_camera_info': 2,
@@ -63,9 +66,9 @@ def generate_launch_description():
             'Mem/InitWMWithAllNodes': 'false'
         }],
         remappings=[
-            ('rgb/image', '/camera/color/image_raw'),
-            ('rgb/camera_info', '/camera/color/camera_info'),
-            ('depth/image', '/camera/aligned_depth_to_color/image_raw'),
+            ('rgb/image', '/camera/camera/color/image_raw'),
+            ('rgb/camera_info', '/camera/camera/color/camera_info'),
+            ('depth/image', '/camera/camera/depth/image_rect_raw'),
             ('odom', '/odom')
         ]
     )
@@ -94,11 +97,45 @@ def generate_launch_description():
         output='screen'
     )
 
+    # 7. RTAB-Map Visualization (GUI)
+    rtabmap_viz_node = Node(
+        package='rtabmap_viz',
+        executable='rtabmap_viz',
+        name='rtabmap_viz',
+        output='screen',
+        parameters=[{
+            'frame_id': 'camera_link',
+            'subscribe_depth': True,
+            'subscribe_rgb': True,
+            'subscribe_odom_info': True,
+            'approx_sync': True,
+            'qos_image': 2,
+            'qos_depth': 2,
+            'qos_camera_info': 2
+        }],
+        remappings=[
+            ('rgb/image', '/camera/camera/color/image_raw'),
+            ('rgb/camera_info', '/camera/camera/color/camera_info'),
+            ('depth/image', '/camera/camera/depth/image_rect_raw'),
+            ('odom', '/odom')
+        ]
+    )
+
+    # 8. RViz2 for Carving Visualization
+    rviz_node = Node(
+        package='rviz2',
+        executable='rviz2',
+        name='rviz2',
+        output='screen'
+    )
+
     return LaunchDescription([
         realsense_launch,
         odom_node,
         rtabmap_node,
         bridge_node,
         carving_node,
-        saver_node
+        saver_node,
+        rtabmap_viz_node,
+        rviz_node
     ])

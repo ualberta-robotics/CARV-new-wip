@@ -22,7 +22,7 @@ class RtabmapBridgeNode(Node):
         # Subscribe to RTAB-Map's dense graph output
         self.sub_map = self.create_subscription(
             MapData,
-            '/rtabmap/mapData',
+            '/mapData',
             self.map_data_callback,
             10
         )
@@ -37,7 +37,7 @@ class RtabmapBridgeNode(Node):
             self.last_processed_node_id = node_data.id
             
             # Ensure the node contains valid tracked features
-            if not node_data.wordIds or len(node_data.wordIds) == 0:
+            if not node_data.word_id_keys or len(node_data.word_id_keys) == 0:
                 continue
 
             kf_msg = KeyframeData()
@@ -49,34 +49,23 @@ class RtabmapBridgeNode(Node):
 
             # 2. Extract Image (If texturing is still needed)
             # RTAB-Map compresses images in NodeData by default to save bandwidth
-            if len(node_data.image) > 0:
+            if len(node_data.data.left_compressed) > 0:
                 try:
-                    cv_img = self.bridge.compressed_imgmsg_to_cv2(node_data.image, "bgr8")
-                    
-                    # --- DEBUG OVERLAY ---
-                    overlay_text = f"KF: {node_data.id} | Points: {len(node_data.wordIds)}"
-                    cv2.putText(cv_img, overlay_text, (20, 40), 
-                                cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 0), 2)
-                    
-                    cv2.imshow("Bridge Debug Output", cv_img)
-                    cv2.waitKey(1)
-                    # ---------------------
+                    img_array = np.frombuffer(node_data.data.left_compressed, np.uint8)
+                    cv_img = cv2.imdecode(img_array, cv2.IMREAD_COLOR)
                     
                     kf_msg.image = self.bridge.cv2_to_imgmsg(cv_img, encoding="bgr8")
                 except Exception as e:
                     self.get_logger().error(f"Image decode failed: {e}")
 
             # 3. Extract 3D Metric Points and IDs
-            # wordPts is a PointCloud2 aligned exactly with the integer array wordIds
-            points_generator = point_cloud2.read_points(node_data.wordPts, field_names=("x", "y", "z"), skip_nans=True)
-            
             valid_points = 0
-            for point, word_id in zip(points_generator, node_data.wordIds):
+            for pt, word_id in zip(node_data.word_pts, node_data.word_id_keys):
                 p = Point()
-                p.x, p.y, p.z = float(point[0]), float(point[1]), float(point[2])
+                p.x, p.y, p.z = float(pt.x), float(pt.y), float(pt.z)
                 
                 kf_msg.points.append(p)
-                kf_msg.point_ids.append(int(word_id))
+                kf_msg.point_ids.append(int(word_id) & 0xFFFFFFFF)
                 valid_points += 1
 
             if valid_points > 0:

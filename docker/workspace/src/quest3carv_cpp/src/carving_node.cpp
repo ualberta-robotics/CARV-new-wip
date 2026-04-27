@@ -11,7 +11,7 @@
 
 class CarvingNode : public rclcpp::Node {
 public:
-    CarvingNode() : Node("carving_node"), keyframe_count_(0), process_every_n_frames_(3) {
+    CarvingNode() : Node("carving_node"), keyframe_count_(0), process_every_n_frames_(1) {
         sub_kf_ = this->create_subscription<quest3carv_interfaces::msg::KeyframeData>(
             "quest3carv/keyframe", 10, 
             std::bind(&CarvingNode::keyframe_callback, this, std::placeholders::_1));
@@ -52,6 +52,13 @@ private:
 
             // Process Incoming Points
             for (size_t i = 0; i < msg->points.size(); ++i) {
+                if (std::isnan(msg->points[i].x) || std::isnan(msg->points[i].y) || std::isnan(msg->points[i].z)) {
+                    continue;
+                }
+                if (msg->points[i].x == 0.0 && msg->points[i].y == 0.0 && msg->points[i].z == 0.0) {
+                    continue;
+                }
+                
                 uint32_t global_id = msg->point_ids[i];
                 int local_idx;
 
@@ -60,7 +67,11 @@ private:
                     obs_count_[local_idx]++;
                     last_seen_kf_[local_idx] = keyframe_count_;
                 } else {
-                    carver_.addPoint(Eigen::Vector3d(msg->points[i].x, msg->points[i].y, msg->points[i].z));
+                    // Slight perturbation to avoid exact duplicate vertices in Delaunay
+                    double px = msg->points[i].x + ((rand() % 1000) - 500) * 1e-7;
+                    double py = msg->points[i].y + ((rand() % 1000) - 500) * 1e-7;
+                    double pz = msg->points[i].z + ((rand() % 1000) - 500) * 1e-7;
+                    carver_.addPoint(Eigen::Vector3d(px, py, pz));
                     local_idx = carver_.numPoints() - 1;
                     global_id_to_local_idx_[global_id] = local_idx; 
                     
@@ -78,7 +89,7 @@ private:
                 return; 
             }
 
-            // 6. Extract Isosurface (The "Skin")
+            // Extract Isosurface
             std::list<Eigen::Vector3d> tris;
             std::vector<Eigen::Vector3d> points_copy = carver_.getPoints();
             carver_.tetsToTris(dt_, points_copy, tris, 1);

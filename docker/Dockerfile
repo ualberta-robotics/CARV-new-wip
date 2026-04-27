@@ -11,6 +11,7 @@ RUN apt-get update && apt-get install -y \
     ros-humble-realsense2-camera \
     ros-humble-rtabmap-ros ros-humble-rtabmap-slam ros-humble-rtabmap-util ros-humble-rtabmap-sync \
     ros-humble-rtabmap-odom \
+    ros-humble-rviz2 ros-humble-rtabmap-viz \
     libcgal-dev libeigen3-dev libboost-dev libboost-serialization-dev libboost-graph-dev\
     && rm -rf /var/lib/apt/lists/*
 

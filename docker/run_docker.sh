@@ -4,6 +4,7 @@ set -e
 xhost +local:$(whoami)
 
 # ensure fresh container
+docker rm -f quest3_receiver 2>/dev/null || true
 docker build -t quest3_receiver:latest .
 
 # Run the container with authority mounting

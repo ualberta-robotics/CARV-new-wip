@@ -1,3 +1,5 @@
+#! ./.venv/bin/python3
+
 import os
 import json
 import cv2
