@@ -8,6 +8,27 @@
 #include "quest3carv_cpp/FreespaceDelaunayAlgorithm.h"
 #include <unordered_map>
 #include <vector>
+#include <cmath>
+
+// Voxel Key for 3D Deduplication
+struct VoxelKey {
+    int x, y, z;
+    bool operator==(const VoxelKey& other) const {
+        return x == other.x && y == other.y && z == other.z;
+    }
+};
+
+// Custom Hash for VoxelKey
+struct VoxelKeyHash {
+    std::size_t operator()(const VoxelKey& k) const {
+        std::size_t h = 0;
+        // Simple hash_combine logic
+        h ^= std::hash<int>{}(k.x) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<int>{}(k.y) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        h ^= std::hash<int>{}(k.z) + 0x9e3779b9 + (h << 6) + (h >> 2);
+        return h;
+    }
+};
 
 class CarvingNode : public rclcpp::Node {
 public:
@@ -50,7 +71,9 @@ private:
             current_rays.push_back(look_dir);
             carver_.setPrincipleRays(current_rays);
 
-            // Process Incoming Points
+            // 3. Process Incoming Points with 3D Voxel Deduplication
+            double voxel_size = 0.05; // 5cm resolution
+            
             for (size_t i = 0; i < msg->points.size(); ++i) {
                 if (std::isnan(msg->points[i].x) || std::isnan(msg->points[i].y) || std::isnan(msg->points[i].z)) {
                     continue;
@@ -59,42 +82,56 @@ private:
                     continue;
                 }
                 
-                uint32_t global_id = msg->point_ids[i];
+                // Calculate Voxel Key
+                VoxelKey v_key = {
+                    static_cast<int>(std::floor(msg->points[i].x / voxel_size)),
+                    static_cast<int>(std::floor(msg->points[i].y / voxel_size)),
+                    static_cast<int>(std::floor(msg->points[i].z / voxel_size))
+                };
+
                 int local_idx;
 
-                if (global_id_to_local_idx_.count(global_id) > 0) {
-                    local_idx = global_id_to_local_idx_[global_id];
+                if (voxel_map_.count(v_key) > 0) {
+                    // Reuse existing vertex for this voxel
+                    local_idx = voxel_map_[v_key];
                     obs_count_[local_idx]++;
                     last_seen_kf_[local_idx] = keyframe_count_;
                 } else {
+                    // Create a new vertex at the voxel center (stable grid)
+                    double px = (v_key.x + 0.5) * voxel_size;
+                    double py = (v_key.y + 0.5) * voxel_size;
+                    double pz = (v_key.z + 0.5) * voxel_size;
+                    
                     // Slight perturbation to avoid exact duplicate vertices in Delaunay
-                    double px = msg->points[i].x + ((rand() % 1000) - 500) * 1e-7;
-                    double py = msg->points[i].y + ((rand() % 1000) - 500) * 1e-7;
-                    double pz = msg->points[i].z + ((rand() % 1000) - 500) * 1e-7;
+                    px += ((rand() % 1000) - 500) * 1e-7;
+                    py += ((rand() % 1000) - 500) * 1e-7;
+                    pz += ((rand() % 1000) - 500) * 1e-7;
+                    
                     carver_.addPoint(Eigen::Vector3d(px, py, pz));
                     local_idx = carver_.numPoints() - 1;
-                    global_id_to_local_idx_[global_id] = local_idx; 
+                    voxel_map_[v_key] = local_idx; 
                     
-                    obs_count_.push_back(3);
+                    obs_count_.push_back(1);
                     last_seen_kf_.push_back(keyframe_count_);
                 }
+                
+                // Every camera observation still contributes its line-of-sight
                 carver_.addVisibilityPair(current_cam_idx, local_idx);
             }
 
-            // This updates the persistent dt_ mesh instead of rebuilding it from scratch
+            // 4. Update the Delaunay triangulation incrementally
             carver_.IterateTetrahedronMethod(dt_, vecVertexHandles_, current_cam_idx);
 
-            // (Placed after the state updates so the Delaunay engine never desyncs from the tracker)
             if (keyframe_count_ % process_every_n_frames_ != 0) {
                 return; 
             }
 
-            // Extract Isosurface
+            // 5. Extract Isosurface
             std::list<Eigen::Vector3d> tris;
             std::vector<Eigen::Vector3d> points_copy = carver_.getPoints();
             carver_.tetsToTris(dt_, points_copy, tris, 1);
             
-            // Standard Near-Field Clipper
+            // 6. Near-Field Clipper
             double near_clip_dist = 0.10; 
             std::list<Eigen::Vector3d> filtered_tris;
             const auto& cams = carver_.getCamCenters(); 
@@ -104,6 +141,8 @@ private:
                 int i1 = std::round(tri.y());
                 int i2 = std::round(tri.z());
                 
+                if (i0 < 0 || i1 < 0 || i2 < 0 || (size_t)i0 >= points_copy.size() || (size_t)i1 >= points_copy.size() || (size_t)i2 >= points_copy.size()) continue;
+
                 Eigen::Vector3d centroid = (points_copy[i0] + points_copy[i1] + points_copy[i2]) / 3.0;
                 
                 double min_cam_dist = std::numeric_limits<double>::max();
@@ -189,12 +228,12 @@ private:
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_mesh_;
     rclcpp::Publisher<visualization_msgs::msg::Marker>::SharedPtr pub_points_;
     
-    // --- THE FIX: Persistent Incremental State ---
     dlovi::FreespaceDelaunayAlgorithm carver_;
     dlovi::FreespaceDelaunayAlgorithm::Delaunay3 dt_;
     std::vector<dlovi::FreespaceDelaunayAlgorithm::Delaunay3::Vertex_handle> vecVertexHandles_;
 
-    std::unordered_map<uint32_t, int> global_id_to_local_idx_; 
+    // Voxel map for 3D deduplication
+    std::unordered_map<VoxelKey, int, VoxelKeyHash> voxel_map_; 
     
     std::vector<int> obs_count_;
     std::vector<int> last_seen_kf_;

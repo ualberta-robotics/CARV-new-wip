@@ -67,27 +67,44 @@ class RtabmapBridgeNode(Node):
                 except Exception as e:
                     self.get_logger().error(f"Image decode failed: {e}")
 
-            # 3. Transform points from camera-local to world frame and filter outliers
-            # NOTE: word_id_keys are visual vocabulary IDs, NOT unique point IDs.
-            # Multiple different 3D points share the same word ID.
-            # We assign a globally unique ID to each observation.
-            MAX_DEPTH = 5.0  # RealSense reliable range
-            valid_points = 0
-            for pt in node_data.word_pts:
+            # 3. 2D Image-Space Suppression (Grid Filter)
+            # Pick only the closest point per grid cell to ensure uniform distribution
+            MAX_DEPTH = 5.0
+            GRID_SIZE = 40 # pixel size of suppression cells
+            grid = {} # (gx, gy) -> (min_dist, point_index)
+            
+            # Check if word_kpts are available for 2D suppression
+            has_kpts = hasattr(node_data, 'word_kpts') and len(node_data.word_kpts) == len(node_data.word_pts)
+            
+            for i in range(len(node_data.word_pts)):
+                pt = node_data.word_pts[i]
                 p_local = np.array([pt.x, pt.y, pt.z])
-
-                # Skip NaN points
+                
                 if np.any(np.isnan(p_local)):
                     continue
-
-                # Filter depth outliers
+                    
                 local_dist = np.linalg.norm(p_local)
                 if local_dist < 0.1 or local_dist > MAX_DEPTH:
                     continue
+                
+                if has_kpts:
+                    # Map to grid cell based on 2D keypoint coordinates
+                    kp = node_data.word_kpts[i]
+                    gx, gy = int(kp.pt.x / GRID_SIZE), int(kp.pt.y / GRID_SIZE)
+                    
+                    if (gx, gy) not in grid or local_dist < grid[(gx, gy)][0]:
+                        grid[(gx, gy)] = (local_dist, i)
+                else:
+                    # Fallback: if no kpts, just accept all valid points
+                    grid[i] = (local_dist, i)
 
-                # Transform to world frame
+            # 4. Transform selected points to world frame
+            valid_points = 0
+            for _, idx in grid.values():
+                pt = node_data.word_pts[idx]
+                p_local = np.array([pt.x, pt.y, pt.z])
                 p_world = rotation.apply(p_local) + t
-
+                
                 p = Point()
                 p.x, p.y, p.z = float(p_world[0]), float(p_world[1]), float(p_world[2])
 
@@ -98,7 +115,7 @@ class RtabmapBridgeNode(Node):
 
             if valid_points > 0:
                 self.kf_pub.publish(kf_msg)
-                self.get_logger().info(f"Keyframe {node_data.id}: Sent {valid_points} points to carver.")
+                self.get_logger().info(f"Keyframe {node_data.id}: Sent {valid_points} points (suppressed from {len(node_data.word_pts)}) to carver.")
 
 def main():
     rclpy.init()
