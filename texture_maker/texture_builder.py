@@ -51,17 +51,15 @@ def load_dataset():
                 T_w2c[:3, :3] = rot.T
                 T_w2c[:3, 3] = -rot.T @ np.array([p['x'], p['y'], p['z']])
                 
-                # --- THE FIX: OpenXR to OpenCV Optical Frame Flip ---
-                # OpenXR looks down -Z with +Y Up. OpenCV looks down +Z with +Y Down.
-                # This matrix perfectly aligns the camera so the math works!
-                R_flip = np.array([
-                    [ 1,  0,  0,  0],
+                # Camera_link (+X fwd, +Y left, +Z up) -> Optical (+X right, +Y down, +Z fwd)
+                # optical_x = -cam_y, optical_y = -cam_z, optical_z = cam_x
+                R_link_to_optical = np.array([
                     [ 0, -1,  0,  0],
                     [ 0,  0, -1,  0],
+                    [ 1,  0,  0,  0],
                     [ 0,  0,  0,  1]
                 ])
-                T_w2c = R_flip @ T_w2c
-                # ----------------------------------------------------
+                T_w2c = R_link_to_optical @ T_w2c
                 
                 img = cv2.imread(img_path)
                 

@@ -40,7 +40,7 @@ private:
                 msg->camera_pose.orientation.y,
                 msg->camera_pose.orientation.z
             );
-            Eigen::Vector3d look_dir = q * Eigen::Vector3d(0, 0, -1);
+            Eigen::Vector3d look_dir = q * Eigen::Vector3d(1, 0, 0);
 
             // 2. Feed the Carver State
             carver_.addCamCenter(cam_center); 
