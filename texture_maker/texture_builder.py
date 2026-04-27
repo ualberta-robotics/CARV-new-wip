@@ -14,7 +14,7 @@ import gco
 DATASET_DIR = "../docker/workspace/export_dataset"
 KF_DIR = os.path.join(DATASET_DIR, "keyframes")
 MESH_PATH = os.path.join(DATASET_DIR, "final_mesh.obj")
-OUTPUT_DIR = "./textured_output"
+OUTPUT_DIR = "./output"
 
 # Camera intrinsics - auto-detected from first keyframe image
 # Defaults for RealSense D435 at 848x480 (depth module resolution)
@@ -338,24 +338,27 @@ def build_texture_atlas(mesh, keyframes, assignments):
         px_x = col * FACE_RES
         px_y = row * FACE_RES
         
-        # We map the triangle to a fixed right-triangle in the designated 32x32 block
-        # pt1 = Bottom Left, pt2 = Bottom Right, pt3 = Top Left
-        dst_pts = np.array([
-            [px_x, px_y + FACE_RES - 1], 
-            [px_x + FACE_RES - 1, px_y + FACE_RES - 1], 
-            [px_x, px_y]
+        # 3. Cut and Warp! (Extract the texture patch)
+        # We map the triangle to a fixed right-triangle in a tiny 32x32 local block
+        dst_pts_local = np.array([
+            [0, FACE_RES - 1], 
+            [FACE_RES - 1, FACE_RES - 1], 
+            [0, 0]
         ], dtype=np.float32)
         
-        # 3. Cut and Warp! (Extract the texture patch)
-        M = cv2.getAffineTransform(src_pts, dst_pts)
-        warped_patch = cv2.warpAffine(img, M, (atlas_size, atlas_size), borderMode=cv2.BORDER_REPLICATE)
+        M = cv2.getAffineTransform(src_pts, dst_pts_local)
+        tile = cv2.warpAffine(img, M, (FACE_RES, FACE_RES), borderMode=cv2.BORDER_REPLICATE)
         
-        # Mask out just the triangle we warped and copy it to the atlas
-        mask = np.zeros((atlas_size, atlas_size), dtype=np.uint8)
-        cv2.fillConvexPoly(mask, dst_pts.astype(np.int32), 255)
-        atlas_img = np.where(mask[:, :, None] == 255, warped_patch, atlas_img)
+        # Mask the tile locally so we don't bleed into adjacent slots
+        tile_mask = np.zeros((FACE_RES, FACE_RES), dtype=np.uint8)
+        cv2.fillConvexPoly(tile_mask, dst_pts_local.astype(np.int32), 255)
+        
+        # Blit the warped tile into the giant atlas
+        roi = atlas_img[px_y:px_y+FACE_RES, px_x:px_x+FACE_RES]
+        atlas_img[px_y:px_y+FACE_RES, px_x:px_x+FACE_RES] = np.where(tile_mask[:, :, None] == 255, tile, roi)
         
         # 4. Record Normalized UV Coordinates (0.0 to 1.0) for the OBJ file
+        dst_pts = dst_pts_local + np.array([px_x, px_y])
         uvs = dst_pts / atlas_size
         # OBJ files expect V=0 at the bottom, OpenCV has V=0 at the top. Flip V!
         uvs[:, 1] = 1.0 - uvs[:, 1] 
