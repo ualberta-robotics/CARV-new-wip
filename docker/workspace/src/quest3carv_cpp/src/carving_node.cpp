@@ -97,10 +97,10 @@ private:
                     obs_count_[local_idx]++;
                     last_seen_kf_[local_idx] = keyframe_count_;
                 } else {
-                    // Create a new vertex at the voxel center (stable grid)
-                    double px = (v_key.x + 0.5) * voxel_size;
-                    double py = (v_key.y + 0.5) * voxel_size;
-                    double pz = (v_key.z + 0.5) * voxel_size;
+                    // Create a new vertex at the actual point location (no more grid snapping!)
+                    double px = msg->points[i].x;
+                    double py = msg->points[i].y;
+                    double pz = msg->points[i].z;
                     
                     // Slight perturbation to avoid exact duplicate vertices in Delaunay
                     px += ((rand() % 1000) - 500) * 1e-7;
