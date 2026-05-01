@@ -29,48 +29,59 @@ class SpatialReconstructionNode(Node):
             os.makedirs(self.output_dir)
         
         # ==========================================================
-        # --- TRUE STEREO RECTIFICATION MATRICES ---
+        # --- PROJECT ARIA FISHEYE624 CALIBRATION ---
         # ==========================================================
-        self.K_l = np.array([[435.61912538,   0.        , 317.98388652],
-                             [  0.        , 437.9473279 , 321.04086798],
-                             [  0.        ,   0.        ,   1.        ]])
         
-        self.K_r = np.array([[434.80716153,   0.        , 317.57993105],
-                             [  0.        , 437.1579483 , 320.20533693],
-                             [  0.        ,   0.        ,   1.        ]])
-
-        # True distortion is required for cv2.remap to properly fix the toe-in
-        self.D_l = np.array([-0.00644166, -0.00671382,  0.00476713, -0.00405459,  0.        ])
-        self.D_r = np.array([ 0.01242142, -0.01958011,  0.00300138, -0.00457861,  0.        ])
-
-        # Extrinsics (relative rotation)
-        self.R1 = np.array([[ 9.99984629e-01, -8.07736960e-04, -5.48529426e-03],
-                            [ 8.01813857e-04,  9.99999093e-01, -1.08192834e-03],
-                            [ 5.48616320e-03,  1.07751353e-03,  9.99984370e-01]])
-        self.R2 = np.array([[ 0.99999545,  0.00224215, -0.00201971],
-                            [-0.00223997,  0.99999691,  0.00108199],
-                            [ 0.00202213, -0.00107746,  0.99999738]])
+        self.aria_left_params = np.array([
+            2.45950108e+02, 2.54271173e+02, 2.54760927e+02, 3.72268602e-02,
+           -5.18844382e-02, 8.34567042e-02, -9.76545331e-02, 4.11587224e-02,
+           -6.17269189e-03, -3.22907861e-04, -1.49661012e-03, 6.26109463e-04,
+            3.06379489e-04, 1.55605608e-03, -2.63267357e-04
+        ])
         
-        self.P1 = np.array([[440.9294569 ,   0.        , 320.29873276,   0.        ],
-                            [  0.        , 440.9294569 , 320.62382889,   0.        ],
-                            [  0.        ,   0.        ,   1.        ,   0.        ]])
-        self.P2 = np.array([[ 4.40929457e+02,  0.00000000e+00,  3.20298733e+02, -2.81582822e+04],
-                            [ 0.00000000e+00,  4.40929457e+02,  3.20623829e+02,  0.00000000e+00],
-                            [ 0.00000000e+00,  0.00000000e+00,  1.00000000e+00,  0.00000000e+00]])
-        
-        # The ultimate agreed-upon baseline
-        self.true_baseline = 0.064
+        self.aria_right_params = np.array([
+            2.46631443e+02, 2.53178304e+02, 2.55425239e+02, 2.99043970e-02,
+           -3.35379923e-02, 5.12976316e-02, -6.40272088e-02, 2.33274370e-02,
+           -2.53216762e-03, -2.39597559e-03, -5.96400095e-04, 2.57583573e-03,
+            2.43233388e-04, 7.54034682e-04, -3.12675361e-05
+        ])
 
-        # Generate the warping maps (Only needs to happen once at startup!)
-        self.map_l_x, self.map_l_y = cv2.initUndistortRectifyMap(
-            self.K_l, self.D_l, self.R1, self.P1, (640, 640), cv2.CV_32FC1)
-        
-        self.map_r_x, self.map_r_y = cv2.initUndistortRectifyMap(
-            self.K_r, self.D_r, self.R2, self.P2, (640, 640), cv2.CV_32FC1)
+        # Right Camera Pose relative to Left
+        T_right = np.array([0.12641746, 0.01815863, -0.04207057])
+        R_right = np.array([
+            [ 0.77033105, -0.26845385,  0.57837929],
+            [ 0.26786756,  0.95937992,  0.0885276 ],
+            [-0.57865105,  0.08673349,  0.81095022]
+        ])
 
-        # Initialize Tracker using the Virtual Rectified Camera Intrinsic (P1)
+        # Baseline is the Euclidean distance of the translation vector
+        self.true_baseline = np.linalg.norm(T_right) 
+
+        # Define your ideal Virtual Pinhole Cameras (P1, P2) 
+        # Using an average focal length and centered principal point for a 512x512 frame
+        ideal_f = 246.0 
+        self.P1 = np.array([[ideal_f, 0., 256., 0.],
+                            [0., ideal_f, 256., 0.],
+                            [0., 0., 1., 0.]])
+        
+        self.P2 = np.array([[ideal_f, 0., 256., -ideal_f * self.true_baseline],
+                            [0., ideal_f, 256., 0.],
+                            [0., 0., 1., 0.]])
+
+        self.R1 = np.eye(3) 
+        self.R2 = R_right
+
+        # Generate the warping maps using the custom Aria mathematical model at 512x512
+        self.map_l_x, self.map_l_y = self.generate_aria_rectification_maps(
+            self.aria_left_params, self.R1, self.P1, image_size=(512, 512)
+        )
+        self.map_r_x, self.map_r_y = self.generate_aria_rectification_maps(
+            self.aria_right_params, self.R2, self.P2, image_size=(512, 512)
+        )
+
         rectified_K = self.P1[:3, :3] 
         self.tracker = StereoPointTracker(rectified_K, baseline=self.true_baseline, logger=self.get_logger())
+        # ==========================================================
         # ==========================================================
 
         # Keyframe Logic State
@@ -93,6 +104,65 @@ class SpatialReconstructionNode(Node):
             [self.sub_l, self.sub_r, self.sub_p], queue_size=10, slop=0.05
         )
         self.ts.registerCallback(self.process_bundle)
+
+    def generate_aria_rectification_maps(self, aria_params, R_rect, P_rect, image_size=(512, 512)):
+        """
+        Generates OpenCV-compatible map_x and map_y for cv2.remap() using 
+        Project Aria's FisheyeRadTanThinPrism (Fisheye624) model.
+        """
+        f = aria_params[0]
+        cx, cy = aria_params[1], aria_params[2]
+        k = aria_params[3:9]
+        p = aria_params[9:11]
+        s = aria_params[11:15]
+
+        h, w = image_size
+        u_rect, v_rect = np.meshgrid(np.arange(w), np.arange(h))
+
+        # 1. Unproject virtual rectified pixels to 3D rays (Linear Model)
+        fx_rect, fy_rect = P_rect[0, 0], P_rect[1, 1]
+        cx_rect, cy_rect = P_rect[0, 2], P_rect[1, 2]
+
+        x_c = (u_rect - cx_rect) / fx_rect
+        y_c = (v_rect - cy_rect) / fy_rect
+        z_c = np.ones_like(x_c)
+        
+        rays_rect = np.stack((x_c, y_c, z_c), axis=-1)
+
+        # 2. Apply inverse rectification rotation to get to the physical camera frame
+        rays_phys = np.einsum('ij,hwj->hwi', R_rect.T, rays_rect)
+        x, y, z = rays_phys[..., 0], rays_phys[..., 1], rays_phys[..., 2]
+
+        # 3. Convert to Polar Coordinates
+        r_xy = np.sqrt(x**2 + y**2)
+        theta = np.arctan2(r_xy, z)
+        
+        safe_r_xy = np.where(r_xy == 0, 1e-8, r_xy)
+        cos_phi = x / safe_r_xy
+        sin_phi = y / safe_r_xy
+
+        # 4. Radial Distortion
+        theta2 = theta**2
+        r_theta = theta + k[0]*theta**3 + k[1]*theta**5 + k[2]*theta**7 + k[3]*theta**9 + k[4]*theta**11 + k[5]*theta**13
+        
+        # Base polar projections
+        u_r = r_theta * cos_phi
+        v_r = r_theta * sin_phi
+
+        # 5. Tangential Distortion
+        r_theta2 = r_theta**2
+        t_x = p[0]*(2*u_r**2 + r_theta2) + 2*p[1]*u_r*v_r
+        t_y = p[1]*(2*v_r**2 + r_theta2) + 2*p[0]*u_r*v_r
+
+        # 6. Thin-Prism Distortion
+        tp_x = s[0]*r_theta2 + s[1]*(r_theta2**2)
+        tp_y = s[2]*r_theta2 + s[3]*(r_theta2**2)
+
+        # 7. Final Distorted Pixel Location
+        u_dist = f * (u_r + t_x + tp_x) + cx
+        v_dist = f * (v_r + t_y + tp_y) + cy
+
+        return u_dist.astype(np.float32), v_dist.astype(np.float32)
 
     def visualize_keyframe(self, img, points_3d, points_2d, ids_3d, camera_pose):
         """
@@ -323,7 +393,7 @@ class SpatialReconstructionNode(Node):
                         v = (fy * p_cam[1] / -p_cam[2]) + cy
                         
                         # 10-pixel safety margin
-                        if 10 <= u < 630 and 10 <= v < 630:
+                        if 10 <= u < 502 and 10 <= v < 502:
                             p = Point()
                             p.x, p.y, p.z = float(pt[0]), float(pt[1]), float(pt[2])
                             kf_msg.points.append(p)

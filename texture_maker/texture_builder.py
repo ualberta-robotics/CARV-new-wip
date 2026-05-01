@@ -17,7 +17,7 @@ OUTPUT_DIR = "./textured_output"
 # The Rectified Camera Intrinsics (Must match your SLAM P1 matrix!)
 FX, FY = 440.9, 440.9
 CX, CY = 320.3, 320.6
-IMG_W, IMG_H = 640, 640
+IMG_W, IMG_H = 512, 512
 
 # Atlas Settings
 FACE_RES = 32  # Every triangle gets a 32x32 pixel block in the atlas

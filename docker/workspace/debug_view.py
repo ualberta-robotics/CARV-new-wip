@@ -6,7 +6,7 @@ import numpy as np
 import multiprocessing as mp
 
 # Configuration
-WIDTH, HEIGHT = 640, 640
+WIDTH, HEIGHT = 512, 512
 UUID = b"CMPUT428_POSE_ID"
 POSE_STRUCT_FMT = "<q7f"
 
@@ -72,6 +72,11 @@ if __name__ == '__main__':
             # Non-blocking get for smooth rendering
             left_img = left_q.get() if not left_q.empty() else None
             right_img = right_q.get() if not right_q.empty() else None
+
+            if left_img is not None:
+                print("Left img recieved")
+            if right_img is not None:
+                print("Right img recieved")
 
             if left_img is not None and right_img is not None:
                 # Combine eyes into Side-by-Side (SBS)

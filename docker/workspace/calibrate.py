@@ -10,7 +10,7 @@ CHECKERBOARD = (9, 6)
 SQUARE_SIZE_MM = 25.0 # Ensure this is exactly the size of your printed squares in millimeters!
 MIN_SAMPLES = 12
 
-WIDTH, HEIGHT = 640, 640
+WIDTH, HEIGHT = 512, 512
 UUID = b"CMPUT428_POSE_ID"
 POSE_STRUCT_FMT = "<q7f"
 

@@ -11,7 +11,7 @@ import multiprocessing as mp
 from cv_bridge import CvBridge
 
 # Constants matching your secondary script
-WIDTH, HEIGHT = 640, 640
+WIDTH, HEIGHT = 512, 512
 UUID = b"CMPUT428_POSE_ID"
 POSE_STRUCT_FMT = "<q7f"
 

@@ -48,7 +48,7 @@ class DepthFilter:
             self.converged = True
 
 class StereoPointTracker:
-    def __init__(self, K, baseline, logger, width=640, height=640):
+    def __init__(self, K, baseline, logger, width=512, height=512):
         self.K = K
         self.fx, self.fy = K[0, 0], K[1, 1]
         self.cx, self.cy = K[0, 2], K[1, 2]
