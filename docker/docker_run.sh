@@ -5,6 +5,8 @@ xhost +local:$(whoami)
 docker run -it --rm \
   --name quest3_receiver \
   --network host \
+  --privileged \
+  -v /dev/bus/usb:/dev/bus/usb \
   --ipc=host \
   --security-opt label=disable \
   -e DISPLAY=$DISPLAY \

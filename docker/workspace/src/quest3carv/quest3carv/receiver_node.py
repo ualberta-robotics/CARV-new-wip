@@ -2,68 +2,19 @@ import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 from geometry_msgs.msg import PoseStamped
-import cv2
-import av
-import socket
-import struct
 import numpy as np
-import multiprocessing as mp
 from cv_bridge import CvBridge
+import queue
+import time
 
-# Constants matching your secondary script
-WIDTH, HEIGHT = 512, 512
-UUID = b"CMPUT428_POSE_ID"
-POSE_STRUCT_FMT = "<q7f"
+# Aria Imports
+import aria.sdk_gen2 as sdk_gen2
+import aria.stream_receiver as receiver
+from projectaria_tools.core.sensor_data import ImageData, ImageDataRecord, FrontendOutput
 
-def eye_worker(port, eye_side, frame_queue, pose_queue):
-    """
-    Isolated process for network ingestion and H.264 decoding.
-    Using a separate process avoids the Python GIL and improves ROS2 performance.
-    """
-    sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-    # Increase buffer to prevent packet loss at high bitrates
-    sock.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2*1024*1024)
-    sock.bind(("0.0.0.0", port))
-    
-    codec = av.CodecContext.create('h264', 'r')
-    codec.thread_type = 'FRAME'
-    codec.thread_count = 4
-
-    while True:
-        try:
-            data, _ = sock.recvfrom(65535)
-            
-            # 1. Handle Pose SEI (60 bytes total)
-            if len(data) == 60 and data[4] == 0x06 and data[7:23] == UUID:
-                pose_data = struct.unpack(POSE_STRUCT_FMT, data[23:59])
-                # Only keep latest pose
-                if pose_queue.full():
-                    try: pose_queue.get_nowait()
-                    except: pass
-                pose_queue.put(pose_data)
-                continue
-
-            # 2. Decode Video
-            packets = codec.parse(data)
-            for packet in packets:
-                try:
-                    frames = codec.decode(packet)
-                    for frame in frames:
-                        img = frame.to_ndarray(format='bgr24')
-                        
-                        # Maintain latest frame only to prevent lag
-                        if frame_queue.full():
-                            try: frame_queue.get_nowait()
-                            except: pass
-                        frame_queue.put(img)
-                except av.error.InvalidDataError:
-                    continue
-        except Exception as e:
-            print(f"Error in {eye_side} worker: {e}")
-
-class Quest3ReceiverNode(Node):
-    def __init__(self):
-        super().__init__('quest3_receiver')
+class UnifiedAriaRosNode(Node):
+    def __init__(self, profile_name="profile9"):
+        super().__init__('quest3_unified_receiver')
         self.bridge = CvBridge()
         
         # ROS Publishers
@@ -71,64 +22,125 @@ class Quest3ReceiverNode(Node):
         self.right_pub = self.create_publisher(Image, 'quest3/right/raw', 10)
         self.pose_pub = self.create_publisher(PoseStamped, 'quest3/pose', 10)
 
-        # Multiprocessing Communication
-        self.left_q = mp.Queue(maxsize=1)
-        self.right_q = mp.Queue(maxsize=1)
-        self.pose_q = mp.Queue(maxsize=2) # Store poses from both eyes
+        # Thread-safe queues (No multiprocessing needed!)
+        self.left_q = queue.Queue(maxsize=2)
+        self.right_q = queue.Queue(maxsize=2)
+        self.pose_q = queue.Queue(maxsize=5)
 
-        # Start Workers
-        self.p_left = mp.Process(target=eye_worker, args=(5000, 'left', self.left_q, self.pose_q), daemon=True)
-        self.p_right = mp.Process(target=eye_worker, args=(5001, 'right', self.right_q, self.pose_q), daemon=True)
+        # 1. Setup Aria Device
+        self.device = self.setup_device(profile_name)
         
-        self.p_left.start()
-        self.p_right.start()
+        # 2. Setup Aria Receiver & Callbacks
+        self.stream_receiver = self.setup_receiver()
 
-        # Timer to poll queues and publish to ROS (30Hz)
+        # 3. Start ROS Polling Timer
         self.create_timer(1/30.0, self.poll_and_publish)
-        self.get_logger().info("Quest 3 Stereo Receiver Node Started (Parallel Mode)")
+        self.get_logger().info("Unified Aria ROS2 Node Started")
 
-    def poll_and_publish(self):
-        # Check if we have new frames
-        l_img = self.left_q.get() if not self.left_q.empty() else None
-        r_img = self.right_q.get() if not self.right_q.empty() else None
+    def setup_device(self, profile_name):
+        device_client = sdk_gen2.DeviceClient()
+        config = sdk_gen2.DeviceClientConfig()
+        device_client.set_client_config(config)
+        device = device_client.connect()
+
+        streaming_config = sdk_gen2.HttpStreamingConfig()
+        streaming_config.profile_name = profile_name
+        streaming_config.streaming_interface = sdk_gen2.StreamingInterface.USB_NCM
+        device.set_streaming_config(streaming_config)
+        device.start_streaming()
+        return device
+
+    def setup_receiver(self):
+        config = sdk_gen2.HttpServerConfig()
+        config.address = "0.0.0.0"
+        config.port = 6768
+
+        stream_receiver = receiver.StreamReceiver(
+            enable_image_decoding=True, enable_raw_stream=False
+        )
+        stream_receiver.set_server_config(config)
+
+        # Register direct class methods as callbacks
+        stream_receiver.register_slam_callback(self.image_callback)
+        stream_receiver.register_vio_callback(self.vio_callback)
+        stream_receiver.start_server()
+        return stream_receiver
+
+    # --- ARIA CALLBACKS (Run on background SDK threads) ---
+    def image_callback(self, image_data: ImageData, image_record: ImageDataRecord):
+        cam_id_str = str(image_record.camera_id).lower()
+        img_array = image_data.to_numpy_array().copy() # Copy out of C++ memory
         
-        # Common timestamp for sync
+        try:
+            if 'right' in cam_id_str or '2' in cam_id_str:
+                self.right_q.put_nowait(img_array)
+            elif 'left' in cam_id_str or '1' in cam_id_str:
+                self.left_q.put_nowait(img_array)
+        except queue.Full:
+            pass # Drop frame if ROS can't keep up
+
+    def vio_callback(self, vio_data: FrontendOutput):
+        ts = vio_data.capture_timestamp_ns
+        t = np.array(vio_data.transform_odometry_bodyimu.translation()).flatten()
+        rotation = vio_data.transform_odometry_bodyimu.rotation()
+        
+        try:
+            quat = rotation.toQuat() 
+            qx, qy, qz, qw = quat.x(), quat.y(), quat.z(), quat.w()
+        except AttributeError:
+            qx, qy, qz, qw = 0.0, 0.0, 0.0, 1.0 
+
+        try:
+            self.pose_q.put_nowait((ts, t[0], t[1], t[2], qx, qy, qz, qw))
+        except queue.Full:
+            pass
+
+    # --- ROS PUBLISHER (Runs on ROS Main Thread) ---
+    def poll_and_publish(self):
         now = self.get_clock().now().to_msg()
 
-        # Publish Images if available
-        if l_img is not None:
-            msg = self.bridge.cv2_to_imgmsg(l_img, "bgr8")
+        # Handle Left Image
+        if not self.left_q.empty():
+            l_img = self.left_q.get()
+            msg = self.bridge.cv2_to_imgmsg(l_img, "mono8") # Assuming grayscale based on your encoding code
             msg.header.stamp = now
             msg.header.frame_id = "quest3_left"
             self.left_pub.publish(msg)
 
-        if r_img is not None:
-            msg = self.bridge.cv2_to_imgmsg(r_img, "bgr8")
+        # Handle Right Image
+        if not self.right_q.empty():
+            r_img = self.right_q.get()
+            msg = self.bridge.cv2_to_imgmsg(r_img, "mono8")
             msg.header.stamp = now
             msg.header.frame_id = "quest3_right"
             self.right_pub.publish(msg)
 
-        # Publish Latest Pose if available
+        # Handle Poses
         while not self.pose_q.empty():
             lp = self.pose_q.get()
-            # lp format: (ts, px, py, pz, qx, qy, qz, qw)
             p_msg = PoseStamped()
-            p_msg.header.stamp = now
+            p_msg.header.stamp = now # Or calculate ROS time from lp[0] (timestamp)
             p_msg.header.frame_id = "world"
             p_msg.pose.position.x, p_msg.pose.position.y, p_msg.pose.position.z = lp[1], lp[2], lp[3]
             p_msg.pose.orientation.x, p_msg.pose.orientation.y, p_msg.pose.orientation.z, p_msg.pose.orientation.w = lp[4], lp[5], lp[6], lp[7]
             self.pose_pub.publish(p_msg)
 
+    def cleanup(self):
+        self.device.stop_streaming()
+        time.sleep(0.5)
+        self.stream_receiver.stop_server()
+
+
 def main():
     rclpy.init()
-    node = Quest3ReceiverNode()
+    node = UnifiedAriaRosNode()
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
-        node.p_left.terminate()
-        node.p_right.terminate()
+        node.get_logger().info("Shutting down SDK...")
+        node.cleanup()
         rclpy.shutdown()
 
 if __name__ == '__main__':

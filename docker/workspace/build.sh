@@ -1,12 +1,17 @@
-#rm -rf build/ install/ log/
+#!/bin/bash
+rm -rf build/ install/ log/
 
+# Source ROS
 source /opt/ros/humble/setup.bash
 
-# Build the message package first so the C++ and Python nodes can find the header/module
-colcon build --packages-select quest3carv_interfaces
+# ACTIVATE THE VENV (Crucial Meta Prerequisite)
+source /opt/aria_venv/bin/activate
 
-# Source the new message overlay
+# Build interfaces first (like Meta does with aria_data_types)
+colcon build --packages-select quest3carv_interfaces
 source install/setup.bash
+
+export PYTHONPATH=/opt/aria_venv/lib/python3.10/site-packages:$PYTHONPATH
 
 # Build the rest
 colcon build
