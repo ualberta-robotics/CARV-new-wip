@@ -293,9 +293,10 @@ class SpatialReconstructionNode(Node):
         # --- NEW: Extrinsic Offset (Head to Left Camera) ---
         # Shifts the origin ~32mm Left, ~15mm Down, ~30mm Forward (where the camera is more or less relative to the head)
         T_head_to_cam = np.eye(4)
-        T_head_to_cam[0, 3] = -0.032  # Left
-        T_head_to_cam[1, 3] = -0.015  # Down (OpenXR Y is Up)
-        T_head_to_cam[2, 3] = -0.030  # FIX: OpenXR -Z is Forward!
+        # Aria has origin at left CV camera
+        # T_head_to_cam[0, 3] = -0.032  # Left
+        # T_head_to_cam[1, 3] = -0.015  # Down (OpenXR Y is Up)
+        # T_head_to_cam[2, 3] = -0.030  # FIX: OpenXR -Z is Forward!
         
         # Apply the offset in the local frame
         mat = head_mat @ T_head_to_cam

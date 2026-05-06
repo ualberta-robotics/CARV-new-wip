@@ -7,7 +7,7 @@ import os
 # CONFIGURATION
 # ==============================================================================
 GRID_SIZE = 32                   # Sparse enough to be clean, dense enough to find lines
-MIN_TRANSLATION_METERS = 0.25    # Don't spam Bayesian updates
+MIN_TRANSLATION_METERS = 0.15    # Don't spam Bayesian updates
 MAX_DEPTH_VARIANCE = 0.10   
 INITIAL_VARIANCE = 2.0      
 
